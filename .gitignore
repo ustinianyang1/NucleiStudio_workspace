@@ -8,6 +8,7 @@
 !*.ld
 !*.pdf
 !*.md
+!*.py
 !*.readme
 !README
 !LICENSE
@@ -47,3 +48,4 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 .metadata/
+.venv311/

@@ -16,6 +16,102 @@
  */
 
 #include "alg_step_counter.h"
+
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
+
+// --- NN Weights ---
+static const float fc1_weight[8][19] = {
+  {-0.090829, -0.191368, -0.019858, -0.046373, -0.032157, -0.144164, 0.085882, -0.002795, 0.158262, 0.088050, 0.172704, -0.049352, 0.097657, -0.159052, -0.191635, -0.197573, 0.010288, 0.172695, 0.089925},
+  {3.278382, 0.690146, -0.013554, 2.587348, 0.390592, -0.064167, 0.078896, 0.650887, -0.172823, 0.446898, 0.113406, -0.233327, 3.843020, -0.459900, 0.009081, 3.228461, -0.192145, -1.411481, -4.818717},
+  {-3.464959, -0.768142, -0.159490, -2.565893, -0.721695, -0.121272, -0.018718, -0.753647, -0.072163, -0.574766, 0.059780, -0.141075, -3.439308, 0.403149, 0.149152, -3.042387, 0.137502, 1.716919, 4.766765},
+  {-0.222106, 0.090571, -0.123482, -0.068632, -0.089260, 0.016659, -0.169766, -0.135394, 0.004020, 0.028203, -0.223401, 0.022452, -0.104379, 0.090112, -0.097206, -0.167041, 0.158915, 0.153260, -0.182971},
+  {-0.699969, 0.120936, -0.309430, -0.544276, -0.401233, -0.103860, -0.128580, -0.319445, -0.203298, -0.239719, 0.075240, -0.217633, -0.510253, -0.051869, -0.030852, -0.662983, 0.307666, -0.188953, 1.291857},
+  {-0.777893, -0.137033, 0.117409, -0.488801, -0.157395, 0.114061, -0.166003, -0.227859, -1.177198, -0.090619, 0.182914, -0.577669, -0.792571, 0.140207, -0.111281, -0.248546, -0.571304, 0.527587, 1.478538},
+  {-0.095290, 0.203206, -0.049630, -0.169402, -0.080330, -0.121689, -0.104547, 0.209600, -0.050690, -0.189161, 0.007555, -0.123664, -0.082963, -0.011541, -0.034628, -0.176321, -0.007744, -0.191354, -0.024811},
+  {0.500171, 0.300782, 0.225813, 0.014787, 0.325934, -0.197534, -0.175132, 0.004111, 0.334455, -0.222405, 0.055076, 0.189959, 0.405484, 0.012444, -0.143180, 0.077766, 1.052389, -0.742050, -0.003753}
+};
+static const float fc1_bias[8] = {0.212747, -0.612810, 0.493807, -0.085916, -0.127848, 0.051452, -0.122469, -0.204783};
+static const float fc2_weight[1][8] = {{-0.228491, 0.077437, -0.052552, -0.336944, -0.062887, 0.003439, 0.054322, 0.130983}};
+static const float fc2_bias[1] = {-1.018581};
+
+static float get_mean(const float *arr, int len) {
+    float sum = 0;
+    for(int i=0; i<len; i++) sum += arr[i];
+    return sum / len;
+}
+
+static float get_variance(const float *arr, int len, float mean) {
+    float var = 0;
+    for(int i=0; i<len; i++) {
+        float diff = arr[i] - mean;
+        var += diff * diff;
+    }
+    return var / len;
+}
+
+static float get_sign(float x) {
+    if (x > 0.0f) return 1.0f;
+    if (x < 0.0f) return -1.0f;
+    return 0.0f;
+}
+
+static int get_zcr(const float *arr, int len, float mean) {
+    int zcr = 0;
+    for (int i = 1; i < len; i++) {
+        float diff1 = get_sign(arr[i-1] - mean);
+        float diff2 = get_sign(arr[i] - mean);
+        if (diff1 != diff2) {
+            zcr++;
+        }
+    }
+    return zcr;
+}
+
+static float get_energy(const float *arr, int len) {
+    float e = 0;
+    for(int i=0; i<len; i++) e += arr[i] * arr[i];
+    return e;
+}
+
+static float get_max_fft(const float *arr, int len) {
+    float max_amp = 0;
+    for (int k = 1; k <= len/2; k++) {
+        float re = 0;
+        float im = 0;
+        for (int n = 0; n < len; n++) {
+            float angle = 2.0f * M_PI * k * n / len;
+            re += arr[n] * cosf(angle);
+            im -= arr[n] * sinf(angle);
+        }
+        float amp = sqrtf(re*re + im*im);
+        if (amp > max_amp) max_amp = amp;
+    }
+    return max_amp;
+}
+
+static float run_nn(float *features) {
+    float h[8];
+    for (int i=0; i<8; i++) {
+        float val = fc1_bias[i];
+        for (int j=0; j<19; j++) {
+            val += fc1_weight[i][j] * features[j];
+        }
+        h[i] = (val > 0) ? val : 0.0f; // ReLU
+    }
+    
+    float out = fc2_bias[0];
+    for (int i=0; i<8; i++) {
+        out += fc2_weight[0][i] * h[i];
+    }
+    // Sigmoid is just out > 0 for binary classification
+    return out;
+}
+
+
 #include <string.h>
 
 #define ABS(a) (((a) >= 0) ? (a) : (-(a)))
@@ -615,63 +711,116 @@ AlgoError step_counter_process(AccInput *acc_input, uint16_t *step_num)
     }
 
     if (win->x_cnt >= win->len) {
-        for (i = 0; i < 3; i++) {
-            peak_valley.p_cnt = 0;
-            peak_valley.v_cnt = 0;
-
-            buf_win_cnt = 0;
-            if (*buf_cnt_p[i] > 0) {
-                load_data(buf_axis_p[i], *buf_cnt_p[i], buf_win, BUF_WIN_LEN, &buf_win_cnt);
-                *buf_cnt_p[i] = 0;
-            }
-            load_data(win_axis_p[i], *win_cnt_p[i], buf_win, BUF_WIN_LEN, &buf_win_cnt);
-            *win_cnt_p[i] = 0;
-
-            array_max_min(buf_win, buf_win_cnt, 1, &buf_win_max);
-            array_max_min(buf_win, buf_win_cnt, -1, &buf_win_min);
-
-            max_min_diff = buf_win_max - buf_win_min;
-            if (max_min_diff > STEP_ACC_DIFF_THRESHOLD) {
-                ret = find_possible_peak_valley(buf_win, buf_win_cnt, &peak_valley);
-                if (ret != ALGO_NORMAL) {
-                    break;
-                }
-
-                ret = remove_false_peak_valley(buf_win, buf_win_cnt, &peak_valley);
-                if (ret != ALGO_NORMAL) {
-                    break;
-                }
-
-                ret = merge_close_peak_valley(buf_win, &peak_valley);
-                if (ret != ALGO_NORMAL) {
-                    break;
-                }
-
-                ret = remove_asymmetric_peaks(buf_win, buf_win_cnt, &peak_valley);
-                if (ret != ALGO_NORMAL) {
-                    break;
-                }
-
-                if (peak_valley.v_cnt >= 1) {
-                    last_v_loc = peak_valley.v_loc[peak_valley.v_cnt - 1];
-                    left_len   = buf_win_cnt - last_v_loc + LEFT_DATA_NUM;
-                    if (left_len < BUF_LEN) {
-                        for (j = 0; j < left_len; j++) {
-                            *(buf_axis_p[i] + j) = buf_win[buf_win_cnt - left_len + j];
-                            (*buf_cnt_p[i])++;
-                        }
+        // --- 1. FEATURE EXTRACTION ---
+        float win_f[4][WIN_LEN];
+        for (int k = 0; k < WIN_LEN; k++) {
+            win_f[0][k] = win->x[k];
+            win_f[1][k] = win->y[k];
+            win_f[2][k] = win->z[k];
+            win_f[3][k] = sqrtf(win_f[0][k]*win_f[0][k] + win_f[1][k]*win_f[1][k] + win_f[2][k]*win_f[2][k]);
+        }
+        
+        float features[19] = {0};
+        int f_idx = 0;
+        float means[4] = {0};
+        float vars[4] = {0};
+        
+        for (int ax = 0; ax < 4; ax++) {
+            means[ax] = get_mean(win_f[ax], WIN_LEN);
+            vars[ax] = get_variance(win_f[ax], WIN_LEN, means[ax]);
+            features[f_idx++] = vars[ax];
+            features[f_idx++] = get_zcr(win_f[ax], WIN_LEN, means[ax]);
+            features[f_idx++] = get_energy(win_f[ax], WIN_LEN);
+            features[f_idx++] = get_max_fft(win_f[ax], WIN_LEN);
+        }
+        
+        // correlations
+        for (int p1 = 0; p1 < 2; p1++) {
+            for (int p2 = p1 + 1; p2 < 3; p2++) {
+                if (vars[p1] > 0 && vars[p2] > 0) {
+                    float cov = 0;
+                    for (int k = 0; k < WIN_LEN; k++) {
+                        cov += (win_f[p1][k] - means[p1]) * (win_f[p2][k] - means[p2]);
                     }
+                    cov /= WIN_LEN;
+                    features[f_idx++] = cov / sqrtf(vars[p1] * vars[p2]);
+                } else {
+                    features[f_idx++] = 0.0f;
                 }
-                xyz_steps[i] = peak_valley.p_cnt;
             }
         }
+        
+        // --- 2. NN INFERENCE ---
+        float nn_out = run_nn(features);
+        int is_step = (nn_out > 0.0f); // before sigmoid > 0 means prob > 0.5
+        
+        // --- 3. COUNT STEPS (only if NN says it's a step) ---
+        if (is_step) {
+            for (i = 0; i < 3; i++) {
+                peak_valley.p_cnt = 0;
+                peak_valley.v_cnt = 0;
+
+                buf_win_cnt = 0;
+                if (*buf_cnt_p[i] > 0) {
+                    load_data(buf_axis_p[i], *buf_cnt_p[i], buf_win, BUF_WIN_LEN, &buf_win_cnt);
+                    *buf_cnt_p[i] = 0;
+                }
+                load_data(win_axis_p[i], *win_cnt_p[i], buf_win, BUF_WIN_LEN, &buf_win_cnt);
+                *win_cnt_p[i] = 0;  // Will reset after loop for logic, but handled correctly per original.
+                // Wait, original logic clears *win_cnt_p[i] here!
+                // But it's done for all 3 axes!
+
+                array_max_min(buf_win, buf_win_cnt, 1, &buf_win_max);
+                array_max_min(buf_win, buf_win_cnt, -1, &buf_win_min);
+
+                max_min_diff = buf_win_max - buf_win_min;
+                if (max_min_diff > STEP_ACC_DIFF_THRESHOLD) {
+                    ret = find_possible_peak_valley(buf_win, buf_win_cnt, &peak_valley);
+                    if (ret != ALGO_NORMAL) {
+                        break;
+                    }
+
+                    ret = remove_false_peak_valley(buf_win, buf_win_cnt, &peak_valley);
+                    if (ret != ALGO_NORMAL) {
+                        break;
+                    }
+
+                    ret = merge_close_peak_valley(buf_win, &peak_valley);
+                    if (ret != ALGO_NORMAL) {
+                        break;
+                    }
+
+                    ret = remove_asymmetric_peaks(buf_win, buf_win_cnt, &peak_valley);
+                    if (ret != ALGO_NORMAL) {
+                        break;
+                    }
+
+                    if (peak_valley.v_cnt >= 1) {
+                        last_v_loc = peak_valley.v_loc[peak_valley.v_cnt - 1];
+                        left_len   = buf_win_cnt - last_v_loc + LEFT_DATA_NUM;
+                        if (left_len < BUF_LEN) {
+                            for (j = 0; j < left_len; j++) {
+                                *(buf_axis_p[i] + j) = buf_win[buf_win_cnt - left_len + j];
+                                (*buf_cnt_p[i])++;
+                            }
+                        }
+                    }
+                    xyz_steps[i] = peak_valley.p_cnt;
+                }
+            }
+            if (ret == ALGO_NORMAL) {
+                array_max_min(xyz_steps, 3, 1, &buf_win_max);
+                array_max_min(xyz_steps, 3, -1, &buf_win_min);
+                *step_num = xyz_steps[0] + xyz_steps[1] + xyz_steps[2] - buf_win_max - buf_win_min;
+            }
+        } else {
+            // Even if not a step, we must clear win_cnt to accept new sliding windows
+            *win_cnt_p[0] = 0;
+            *win_cnt_p[1] = 0;
+            *win_cnt_p[2] = 0;
+        }
     }
-    if (ret == ALGO_NORMAL) {
-        array_max_min(xyz_steps, 3, 1, &buf_win_max);
-        array_max_min(xyz_steps, 3, -1, &buf_win_min);
-        *step_num = xyz_steps[0] + xyz_steps[1] + xyz_steps[2] - buf_win_max - buf_win_min;
-    }
-    printf("x=%d, y=%d, z=%d, step=%d\t", xyz_steps[0] * 2, xyz_steps[1] * 2, xyz_steps[2] * 2,
-           (*step_num) * 2);
+    // original code had printf...
+    // printf("x=%d, y=%d, z=%d, step=%d	", xyz_steps[0] * 2, xyz_steps[1] * 2, xyz_steps[2] * 2, (*step_num) * 2);
     return ret;
 }
