@@ -25,45 +25,20 @@
 #include "board.h"
 #include "osal.h"
 #include "vpi_error.h"
-#include "vpi_event.h"
 #include "main.h"
 
-static EventManager pSysManager = NULL;
-static EventManager pCustomManager = NULL;
-
-static int sys_manager_handler(EventManager manager, EventId event_id, EventParam param)
+static void task_sample(void *param)
 {
-    uint32_t value;
+    int count = 0;
 
-    if (event_id == EVENT_SYS_TEST) {
-        value = *(uint32_t *)param;
-        uart_printf("Task1 received EVENT_SYS_TEST, value: 0x%lx\r\n", value);
-    }
-
-    return EVENT_OK;
-}
-
-static void task_sys_mgr(void *param)
-{
-    uart_printf("Task1 started, listening for events...\r\n");
-    while (1) {
-        vpi_event_listen(pSysManager);
-    }
-}
-
-static void task_custom_mgr(void *param)
-{
-    uint32_t value = 0xa5a5;
-    int ret;
-
-    while (1) {
-        uart_printf("Task2 sending EVENT_SYS_TEST with value: 0x%lx\r\n", value);
-        ret = vpi_event_notify(EVENT_SYS_TEST, &value);
-        if (ret != EVENT_OK) {
-            uart_printf("vpi_event_notify failed: %d\r\n", ret);
-        }
+    while (count < 10) {
+        count++;
+        uart_printf("Sample task count %d\r\n", count);
         osal_sleep(1000);
     }
+
+    uart_printf("Finish sample task!\r\n");
+    osal_delete_task(NULL);
 }
 
 static void task_init_app(void *param)
@@ -89,27 +64,7 @@ static void task_init_app(void *param)
 
     uart_printf("Hello VeriHealthi!\r\n");
 
-    pSysManager = vpi_event_new_manager(EVENT_MGR_SYS, sys_manager_handler);
-    if (pSysManager == NULL) {
-        uart_printf("Failed to create sys manager\r\n");
-        goto exit;
-    }
-
-    ret = vpi_event_register(EVENT_SYS_TEST, pSysManager);
-    if (ret != EVENT_OK) {
-        uart_printf("Failed to register EVENT_SYS_TEST\r\n");
-        goto exit;
-    }
-
-    pCustomManager = vpi_event_new_manager(EVENT_MGR_CUSTOM, NULL);
-    if (pCustomManager == NULL) {
-        uart_printf("Failed to create custom manager\r\n");
-        goto exit;
-    }
-
-    osal_create_task(task_sys_mgr, "sys_mgr", 256, 4, NULL);
-    osal_create_task(task_custom_mgr, "custom_mgr", 256, 5, NULL);
-
+    osal_create_task(task_sample, "task_sample", 512, 4, NULL);
 exit:
     osal_delete_task(NULL);
 }
